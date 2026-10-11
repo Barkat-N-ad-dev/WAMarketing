@@ -53,7 +53,9 @@ data class TemplateItem(
     val content: String,
     val templateType: String, // "Local App Template" vs "WhatsApp Approved Template"
     val status: String = "APPROVED", // APPROVED, PENDING, REJECTED
-    val variables: List<String> = emptyList()
+    val variables: List<String> = emptyList(),
+    val buttonText: String? = null,
+    val buttonUrl: String? = null
 )
 
 data class ConversationItem(
