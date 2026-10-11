@@ -3,6 +3,8 @@ package com.wamarketing.app.ui.screens.templates
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -204,6 +206,23 @@ fun TemplateCardItem(template: TemplateItem) {
                     }
                 }
             }
+            if (!template.buttonText.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = { /* preview button */ },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(vertical = 4.dp, horizontal = 12.dp)
+                ) {
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = WhatsAppGreen)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "${template.buttonText} (${template.buttonUrl ?: "Link"})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = WhatsAppGreen
+                    )
+                }
+            }
         }
     }
 }
@@ -218,6 +237,9 @@ fun CreateTemplateDialog(
     var content by remember { mutableStateOf("") }
     var language by remember { mutableStateOf("en_US") }
     var isOfficial by remember { mutableStateOf(true) }
+    var addWebsiteButton by remember { mutableStateOf(false) }
+    var buttonText by remember { mutableStateOf("Visit Website") }
+    var buttonUrl by remember { mutableStateOf("https://") }
 
     val officialCategories = listOf("Marketing", "Utility", "Authentication")
 
@@ -234,7 +256,10 @@ fun CreateTemplateDialog(
             }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = {
@@ -284,8 +309,43 @@ fun CreateTemplateDialog(
                     }
                 }
 
+                // Website Button Option
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = addWebsiteButton, onCheckedChange = { addWebsiteButton = it })
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add Website Button (CTA URL)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                        }
+
+                        if (addWebsiteButton) {
+                            OutlinedTextField(
+                                value = buttonText,
+                                onValueChange = { buttonText = it },
+                                label = { Text("Button Text (max 25 chars)") },
+                                placeholder = { Text("e.g. Visit Website / Download Now") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = buttonUrl,
+                                onValueChange = { buttonUrl = it },
+                                label = { Text("Website Link URL") },
+                                placeholder = { Text("https://yourwebsite.com") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = isOfficial, onCheckedChange = { isOfficial = it })
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text("Submit to Meta WhatsApp Business Management", style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -303,7 +363,9 @@ fun CreateTemplateDialog(
                             content = content,
                             templateType = if (isOfficial) "WhatsApp Approved Template" else "Local App Template",
                             status = if (isOfficial) "APPROVED" else "DRAFT",
-                            variables = listOf("first_name", "company")
+                            variables = listOf("first_name", "company"),
+                            buttonText = if (addWebsiteButton && buttonText.isNotBlank()) buttonText.trim() else null,
+                            buttonUrl = if (addWebsiteButton && buttonUrl.isNotBlank()) buttonUrl.trim() else null
                         )
                         onConfirm(newTmpl)
                     }
