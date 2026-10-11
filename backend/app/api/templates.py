@@ -65,6 +65,8 @@ async def create_template(
                     language=template_in.language or "en_US",
                     header_text=template_in.header_text,
                     footer_text=template_in.footer_text,
+                    button_text=template_in.button_text,
+                    button_url=template_in.button_url,
                     token=wa_account.access_token
                 )
                 meta_id = str(meta_res.get("id", ""))
@@ -85,6 +87,8 @@ async def create_template(
         content=template_in.content,
         header_text=template_in.header_text,
         footer_text=template_in.footer_text,
+        button_text=template_in.button_text,
+        button_url=template_in.button_url,
         template_type=template_in.template_type,
         status=initial_status,
         meta_template_id=meta_id,
@@ -119,11 +123,19 @@ async def sync_meta_templates(
             mt_lang = mt.get("language", "en_US")
             mt_id = str(mt.get("id", ""))
 
-            # Extract body text from components if available
+            # Extract body text and buttons from components if available
             body_text = ""
+            btn_text = None
+            btn_url = None
             for comp in mt.get("components", []):
                 if comp.get("type") == "BODY":
                     body_text = comp.get("text", "")
+                elif comp.get("type") == "BUTTONS":
+                    buttons = comp.get("buttons", [])
+                    if buttons:
+                        first_btn = buttons[0]
+                        btn_text = first_btn.get("text")
+                        btn_url = first_btn.get("url")
 
             existing = db.query(MessageTemplate).filter(
                 MessageTemplate.business_id == current_user.business_id,
@@ -136,6 +148,10 @@ async def sync_meta_templates(
                 existing.meta_template_id = mt_id
                 if body_text and not existing.content:
                     existing.content = body_text
+                if btn_text:
+                    existing.button_text = btn_text
+                if btn_url:
+                    existing.button_url = btn_url
             else:
                 new_t = MessageTemplate(
                     business_id=current_user.business_id,
@@ -143,6 +159,8 @@ async def sync_meta_templates(
                     category=mt_category,
                     language=mt_lang,
                     content=body_text or f"Meta pre-approved template {mt_name}",
+                    button_text=btn_text,
+                    button_url=btn_url,
                     template_type="WhatsApp Approved Template",
                     status=mt_status,
                     meta_template_id=mt_id,
