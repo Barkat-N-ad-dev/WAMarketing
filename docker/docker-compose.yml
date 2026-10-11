@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: wamarketing-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wamarketing_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wamarketing_secure_pass123}
+      POSTGRES_DB: ${POSTGRES_DB:-wamarketing_db}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wamarketing_user -d wamarketing_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.backend
+    container_name: wamarketing-backend
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-wamarketing_user}:${POSTGRES_PASSWORD:-wamarketing_secure_pass123}@db:5432/${POSTGRES_DB:-wamarketing_db}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-WAMARKETING_SUPER_SECRET_PRODUCTION_KEY_2026}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRE_MINUTES: 1440
+      WHATSAPP_API_BASE_URL: https://graph.facebook.com/v19.0
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${WHATSAPP_WEBHOOK_VERIFY_TOKEN:-wamarketing_wh_secret_2026}
+      PORT: 8000
+    ports:
+      - "${BACKEND_HOST_PORT:-8001}:8000"
+    volumes:
+      - ../backend/uploads:/app/uploads
+
+volumes:
+  postgres_data:

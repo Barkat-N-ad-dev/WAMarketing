@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Databases & local uploads
+*.db
+*.sqlite
+*.sqlite3
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Sensitive config & credentials
+.env
+*.env.local
+
+# Executables & Binaries
+cloudflared.exe
+*.exe
+
+# Android & Gradle
+.gradle/
+build/
+app/build/
+android/app/build/
+android/.gradle/
+android/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# APKs and bundles
+*.apk
+*.aab
+
+# Node & Tunnel tools
+node_modules/
+npm-debug.log
