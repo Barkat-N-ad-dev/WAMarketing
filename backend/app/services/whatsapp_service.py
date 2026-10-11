@@ -556,11 +556,14 @@ class WhatsAppService:
         language: str = "en_US",
         header_text: Optional[str] = None,
         footer_text: Optional[str] = None,
+        button_text: Optional[str] = None,
+        button_url: Optional[str] = None,
         token: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Submits a message template directly to Meta WhatsApp Business Management (WhatsApp Manager).
         POST https://graph.facebook.com/v19.0/{waba_id}/message_templates
+        Supports Header, Body, Footer, and Call-To-Action Website URL Buttons.
         """
         access_token = token or self.default_token
         clean_name = re.sub(r'[^a-z0-9_]', '_', name.lower().strip())
@@ -606,6 +609,21 @@ class WhatsAppService:
             components.append({
                 "type": "FOOTER",
                 "text": footer_text
+            })
+
+        if button_text and button_url:
+            clean_url = button_url.strip()
+            if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
+                clean_url = f"https://{clean_url}"
+            components.append({
+                "type": "BUTTONS",
+                "buttons": [
+                    {
+                        "type": "URL",
+                        "text": button_text.strip()[:25],
+                        "url": clean_url
+                    }
+                ]
             })
 
         if self._is_mock(access_token):
