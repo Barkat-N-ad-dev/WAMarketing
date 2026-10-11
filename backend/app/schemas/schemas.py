@@ -194,6 +194,8 @@ class TemplateCreate(BaseModel):
     content: str
     header_text: Optional[str] = None
     footer_text: Optional[str] = None
+    button_text: Optional[str] = None
+    button_url: Optional[str] = None
     template_type: str = "Local App Template"  # Local App Template vs WhatsApp Approved Template
     variables: Optional[List[str]] = []
 
@@ -203,6 +205,8 @@ class TemplateUpdate(BaseModel):
     content: Optional[str] = None
     header_text: Optional[str] = None
     footer_text: Optional[str] = None
+    button_text: Optional[str] = None
+    button_url: Optional[str] = None
     template_type: Optional[str] = None
     status: Optional[str] = None
     variables: Optional[List[str]] = None
@@ -216,6 +220,8 @@ class TemplateResponse(BaseModel):
     content: str
     header_text: Optional[str] = None
     footer_text: Optional[str] = None
+    button_text: Optional[str] = None
+    button_url: Optional[str] = None
     variables: str
     template_type: str
     status: str
