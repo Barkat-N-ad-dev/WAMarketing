@@ -5,8 +5,10 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from app.models.entities import Contact, Tag, OptStatus, Lead, LeadStage
 from app.utils.phone_validator import sanitize_phone_number
-from app.schemas.schemas import ContactImportResult
-import pypdf
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
 
 class ContactService:
 
@@ -155,6 +157,8 @@ class ContactService:
     def _extract_from_pdf(file_bytes: bytes) -> List[Dict[str, Any]]:
         records = []
         try:
+            if not pypdf:
+                return []
             reader = pypdf.PdfReader(io.BytesIO(file_bytes))
             phone_pattern = re.compile(r"(\+?\d{1,4}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}")
             email_pattern = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
