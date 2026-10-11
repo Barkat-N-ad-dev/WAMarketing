@@ -4,11 +4,11 @@ import android.content.SharedPreferences
 import java.net.HttpURLConnection
 
 object AppConfig {
-    const val DEFAULT_BACKEND_URL = "https://perfectly-adaptor-schemes-forge.trycloudflare.com"
+    const val DEFAULT_BACKEND_URL = "https://wamarketing-production.up.railway.app"
 
     fun getBackendUrl(prefs: SharedPreferences?): String {
         val stored = prefs?.getString("backend_api_url", null)
-        if (stored.isNullOrBlank() || stored.contains("192.168.") || stored.contains("loca.lt") || stored.contains("themes-mil-coordinator-discover") || stored.contains("des-frontpage") || stored.contains("successful-recipients") || stored.contains("reliable-screw-prague-conduct") || stored.contains("premises-share-bottom-seal") || stored.contains("milwaukee-bunny-monster-permit")) {
+        if (stored.isNullOrBlank() || stored.contains("192.168.") || stored.contains("loca.lt") || stored.contains("trycloudflare.com") || stored.contains("themes-mil-coordinator-discover") || stored.contains("perfectly-adaptor-schemes-forge") || stored.contains("des-frontpage") || stored.contains("successful-recipients") || stored.contains("reliable-screw-prague-conduct") || stored.contains("premises-share-bottom-seal") || stored.contains("milwaukee-bunny-monster-permit")) {
             prefs?.edit()?.putString("backend_api_url", DEFAULT_BACKEND_URL)?.apply()
             return DEFAULT_BACKEND_URL
         }
