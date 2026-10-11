@@ -670,17 +670,20 @@ def update_whatsapp_credentials(
     db: Session = Depends(get_db)
 ):
     """
-    Synchronizes new Meta WhatsApp token and phone number ID across the database.
-    Ensures that newly generated tokens in the client are immediately live on the server.
+    Synchronizes new Meta WhatsApp token, phone number ID, and WABA ID across the database.
+    Ensures that newly entered client credentials are immediately live on the server.
     """
     token = payload.get("access_token", "").strip()
     phone_id = payload.get("phone_number_id", "").strip()
+    waba_id = payload.get("waba_id", "").strip()
     if token:
         updated_count = 0
         for acc in db.query(WhatsAppAccount).all():
             acc.access_token = token
             if phone_id:
                 acc.phone_number_id = phone_id
+            if waba_id:
+                acc.waba_id = waba_id
             updated_count += 1
         db.commit()
         return {
