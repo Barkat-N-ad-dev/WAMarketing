@@ -296,6 +296,12 @@ class WAMarketingRepository(context: Context? = null) {
                 payload.put("language", template.language)
                 payload.put("content", template.content)
                 payload.put("template_type", template.templateType)
+                if (!template.buttonText.isNullOrBlank()) {
+                    payload.put("button_text", template.buttonText)
+                }
+                if (!template.buttonUrl.isNullOrBlank()) {
+                    payload.put("button_url", template.buttonUrl)
+                }
 
                 conn.outputStream.use { os ->
                     os.write(payload.toString().toByteArray(Charsets.UTF_8))
@@ -346,7 +352,9 @@ class WAMarketingRepository(context: Context? = null) {
                                 language = obj.optString("language", "en"),
                                 content = obj.optString("content", ""),
                                 templateType = obj.optString("template_type", "WhatsApp Approved Template"),
-                                status = obj.optString("status", "APPROVED")
+                                status = obj.optString("status", "APPROVED"),
+                                buttonText = if (obj.isNull("button_text")) null else obj.optString("button_text").ifBlank { null },
+                                buttonUrl = if (obj.isNull("button_url")) null else obj.optString("button_url").ifBlank { null }
                             )
                         )
                     }
@@ -394,6 +402,7 @@ class WAMarketingRepository(context: Context? = null) {
             if (tok.isNotBlank()) {
                 prefs?.edit()?.putString("meta_access_token", tok)
                     ?.putString("meta_phone_number_id", account.phoneNumberId)
+                    ?.putString("meta_waba_id", account.wabaId)
                     ?.apply()
 
                 // Synchronize credentials with backend
@@ -411,6 +420,7 @@ class WAMarketingRepository(context: Context? = null) {
                         val json = JSONObject().apply {
                             put("access_token", tok)
                             put("phone_number_id", account.phoneNumberId)
+                            put("waba_id", account.wabaId)
                         }
                         conn.outputStream.use { it.write(json.toString().toByteArray()) }
                         conn.responseCode // execute
@@ -433,6 +443,7 @@ class WAMarketingRepository(context: Context? = null) {
             if (tok.isNotBlank()) {
                 prefs?.edit()?.putString("meta_access_token", tok)
                     ?.putString("meta_phone_number_id", active.phoneNumberId)
+                    ?.putString("meta_waba_id", active.wabaId)
                     ?.apply()
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
@@ -447,6 +458,7 @@ class WAMarketingRepository(context: Context? = null) {
                         val json = JSONObject().apply {
                             put("access_token", tok)
                             put("phone_number_id", active.phoneNumberId)
+                            put("waba_id", active.wabaId)
                         }
                         conn.outputStream.use { it.write(json.toString().toByteArray()) }
                         conn.responseCode
@@ -1404,6 +1416,8 @@ class WAMarketingRepository(context: Context? = null) {
                 obj.put("content", t.content)
                 obj.put("templateType", t.templateType)
                 obj.put("status", t.status)
+                obj.put("buttonText", t.buttonText ?: "")
+                obj.put("buttonUrl", t.buttonUrl ?: "")
                 array.put(obj)
             }
             prefs?.edit()?.putString(KEY_TEMPLATES, array.toString())?.apply()
@@ -1425,7 +1439,9 @@ class WAMarketingRepository(context: Context? = null) {
                         language = obj.optString("language", "en"),
                         content = obj.getString("content"),
                         templateType = obj.optString("templateType", "WhatsApp Approved Template"),
-                        status = obj.optString("status", "APPROVED")
+                        status = obj.optString("status", "APPROVED"),
+                        buttonText = obj.optString("buttonText").ifBlank { null },
+                        buttonUrl = obj.optString("buttonUrl").ifBlank { null }
                     )
                 )
             }
