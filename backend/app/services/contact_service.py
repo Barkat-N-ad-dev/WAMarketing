@@ -5,6 +5,8 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from app.models.entities import Contact, Tag, OptStatus, Lead, LeadStage
 from app.utils.phone_validator import sanitize_phone_number
+from app.schemas.schemas import ContactImportResult
+
 try:
     import pypdf
 except ImportError:
