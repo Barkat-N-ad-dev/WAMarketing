@@ -183,6 +183,8 @@ class MessageTemplate(Base):
     footer_text = Column(String(255), nullable=True)
     variables = Column(Text, default="[]")  # JSON array string e.g. ["first_name", "company"]
     template_type = Column(String(50), default="Local App Template")  # "Local App Template" vs "WhatsApp Approved Template"
+    button_text = Column(String(100), nullable=True)
+    button_url = Column(String(500), nullable=True)
     status = Column(String(50), default="APPROVED")  # APPROVED, PENDING, REJECTED, DRAFT
     meta_template_id = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
