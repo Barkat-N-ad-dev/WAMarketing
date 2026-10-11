@@ -3,6 +3,10 @@
 > **Full-Stack Enterprise WhatsApp Marketing & Engagement Suite**  
 > Powered by Meta's Official WhatsApp Cloud API, FastAPI, and Android Jetpack Compose. Multi-Tenant, Zero-PC Tunneling, and Production-Ready.
 
+
+[![Download APK](https://img.shields.io/badge/Download_Android_APK-v1.0.0_Direct_Download-brightgreen?style=for-the-badge&logo=android)](https://github.com/Barkat-N-ad-dev/WAMarketing/releases/download/v1.0.0/wamarketing-v1.0.0.apk)
+
+
 ---
 
 ## 📸 Application Showcase
