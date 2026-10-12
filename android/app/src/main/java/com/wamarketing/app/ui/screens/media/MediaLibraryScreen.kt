@@ -275,8 +275,8 @@ private fun processAndAddDeviceFile(
         else -> "document"
     }
 
-    val isNative = fileType in listOf("image", "video", "document")
-    val reason = if (!isNative) "APK files are shared via direct 1-click cloud download link" else null
+    val isNative = true
+    val reason: String? = null
 
     val newItem = MediaFileItem(
         id = (1000..9999).random(),

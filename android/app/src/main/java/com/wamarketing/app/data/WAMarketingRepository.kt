@@ -24,12 +24,17 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-class WAMarketingRepository(context: Context? = null) {
+class WAMarketingRepository(private val context: Context? = null) {
+
+    private val repoContext: Context? get() = context ?: appContext
 
     private val prefs: SharedPreferences? = (context ?: appContext)?.getSharedPreferences(
         "wamarketing_persistent_store",
         Context.MODE_PRIVATE
     )
+
+    // Cache uploaded Meta media IDs (URI string -> Meta media ID) to avoid redundant binary uploads
+    private val mediaUploadCache = mutableMapOf<String, String>()
 
     // Event flow for user-facing feedback (toasts / snackbars)
     private val _notificationEvents = MutableSharedFlow<String>(extraBufferCapacity = 10)
@@ -919,13 +924,29 @@ class WAMarketingRepository(context: Context? = null) {
                 } else if (mediaUrl != null) {
                     payload.put("type", waType)
                     val mediaObj = JSONObject()
-                    mediaObj.put("link", mediaUrl)
+                    val isLocalUri = mediaUrl.startsWith("content://") || mediaUrl.startsWith("file://")
+                    val ctx = repoContext
+                    var metaMediaId: String? = null
+                    if (isLocalUri && ctx != null && !token.isNullOrBlank()) {
+                        metaMediaId = mediaUploadCache[mediaUrl] ?: uploadMediaToMeta(ctx, Uri.parse(mediaUrl), phoneId, token).also {
+                            if (it != null) mediaUploadCache[mediaUrl] = it
+                        }
+                    }
+                    if (metaMediaId != null) {
+                        mediaObj.put("id", metaMediaId)
+                    } else {
+                        mediaObj.put("link", mediaUrl)
+                    }
                     if (waType != "audio" && text.isNotBlank()) {
                         mediaObj.put("caption", text)
                     }
+                    val fileName = if (isLocalUri && ctx != null) {
+                        getFileNameFromUri(ctx, Uri.parse(mediaUrl))
+                    } else {
+                        mediaUrl.substringAfterLast("/").substringBefore("?")
+                    }
                     if (isDoc) {
-                        val fileName = mediaUrl.substringAfterLast("/").substringBefore("?")
-                        mediaObj.put("filename", if (fileName.isNotBlank()) fileName else "document.apk")
+                        mediaObj.put("filename", if (fileName.isNotBlank() && fileName != "link") fileName else "application.apk")
                     }
                     payload.put(waType, mediaObj)
                 } else {
@@ -948,24 +969,42 @@ class WAMarketingRepository(context: Context? = null) {
                     // If a template was sent and a media file/APK was also attached, send the file as follow-up
                     if (templateName != null && mediaUrl != null) {
                         try {
+                            val isLocalUri = mediaUrl.startsWith("content://") || mediaUrl.startsWith("file://")
+                            val ctx = repoContext
+                            var metaMediaId: String? = null
+                            if (isLocalUri && ctx != null && !token.isNullOrBlank()) {
+                                metaMediaId = mediaUploadCache[mediaUrl] ?: uploadMediaToMeta(ctx, Uri.parse(mediaUrl), phoneId, token).also {
+                                    if (it != null) mediaUploadCache[mediaUrl] = it
+                                }
+                            }
+
                             val mediaUrlObj = URL("https://graph.facebook.com/v19.0/$phoneId/messages")
                             val mediaConn = mediaUrlObj.openConnection() as HttpURLConnection
                             mediaConn.requestMethod = "POST"
                             mediaConn.setRequestProperty("Authorization", "Bearer $token")
                             mediaConn.setRequestProperty("Content-Type", "application/json")
                             mediaConn.doOutput = true
-                            mediaConn.connectTimeout = 15000
-                            mediaConn.readTimeout = 15000
+                            mediaConn.connectTimeout = 30000
+                            mediaConn.readTimeout = 30000
 
                             val mPayload = JSONObject()
                             mPayload.put("messaging_product", "whatsapp")
+                            mPayload.put("recipient_type", "individual")
                             mPayload.put("to", cleanPhone)
                             mPayload.put("type", waType)
                             val mObj = JSONObject()
-                            mObj.put("link", mediaUrl)
+                            if (metaMediaId != null) {
+                                mObj.put("id", metaMediaId)
+                            } else {
+                                mObj.put("link", mediaUrl)
+                            }
+                            val fileName = if (isLocalUri && ctx != null) {
+                                getFileNameFromUri(ctx, Uri.parse(mediaUrl))
+                            } else {
+                                mediaUrl.substringAfterLast("/").substringBefore("?")
+                            }
                             if (isDoc) {
-                                val fileName = mediaUrl.substringAfterLast("/").substringBefore("?")
-                                mObj.put("filename", if (fileName.isNotBlank()) fileName else "application.apk")
+                                mObj.put("filename", if (fileName.isNotBlank() && fileName != "link") fileName else "application.apk")
                             }
                             mPayload.put(waType, mObj)
                             mediaConn.outputStream.use { os ->
@@ -1228,6 +1267,82 @@ class WAMarketingRepository(context: Context? = null) {
             }
         }
         return result?.ifBlank { null } ?: "file_${System.currentTimeMillis()}"
+    }
+
+    private fun uploadMediaToMeta(
+        context: Context,
+        fileUri: Uri,
+        phoneId: String,
+        token: String
+    ): String? {
+        return try {
+            val cr = context.contentResolver
+            val inputStream = cr.openInputStream(fileUri) ?: return null
+            val bytes = inputStream.use { it.readBytes() }
+            if (bytes.isEmpty()) return null
+
+            val fileName = getFileNameFromUri(context, fileUri)
+            val lower = fileName.lowercase()
+            val uploadMime = when {
+                lower.endsWith(".apk") -> "text/plain"
+                lower.endsWith(".pdf") -> "application/pdf"
+                lower.endsWith(".png") -> "image/png"
+                lower.endsWith(".jpg") || lower.endsWith(".jpeg") -> "image/jpeg"
+                lower.endsWith(".mp4") -> "video/mp4"
+                lower.endsWith(".mp3") -> "audio/mpeg"
+                else -> "text/plain"
+            }
+
+            val boundary = "Boundary${System.currentTimeMillis()}"
+            val url = URL("https://graph.facebook.com/v19.0/$phoneId/media")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Authorization", "Bearer $token")
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            conn.doOutput = true
+            conn.connectTimeout = 60000
+            conn.readTimeout = 60000
+
+            val os = conn.outputStream
+            val writer = os.bufferedWriter(Charsets.UTF_8)
+
+            // Part 1: messaging_product
+            writer.write("--$boundary\r\n")
+            writer.write("Content-Disposition: form-data; name=\"messaging_product\"\r\n\r\n")
+            writer.write("whatsapp\r\n")
+
+            // Part 2: type
+            writer.write("--$boundary\r\n")
+            writer.write("Content-Disposition: form-data; name=\"type\"\r\n\r\n")
+            writer.write("$uploadMime\r\n")
+
+            // Part 3: file binary
+            writer.write("--$boundary\r\n")
+            writer.write("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"\r\n")
+            writer.write("Content-Type: $uploadMime\r\n\r\n")
+            writer.flush()
+
+            os.write(bytes)
+            os.flush()
+
+            writer.write("\r\n--$boundary--\r\n")
+            writer.flush()
+
+            val code = conn.responseCode
+            if (code in 200..299) {
+                val resp = conn.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(resp)
+                val metaId = json.optString("id").ifBlank { null }
+                metaId
+            } else {
+                val errResp = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $code"
+                android.util.Log.e("WAMarketing", "Meta media upload error ($code): $errResp")
+                null
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("WAMarketing", "Meta media upload exception: ${e.localizedMessage}")
+            null
+        }
     }
 
     /**
