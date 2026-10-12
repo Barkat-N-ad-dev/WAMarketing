@@ -247,18 +247,27 @@ async def send_message(
     try:
         if is_template:
             template_name = msg_in.template_name
-            template_lang = msg_in.template_language or "en"
-            if template_name == "hello_world" or template_lang == "en":
-                if template_name == "hello_world":
-                    template_lang = "en_US"
+            template_lang = msg_in.template_language
+            
+            # Lookup template in database to get its exact Meta registered language code
+            tmpl = None
             if msg_in.template_id:
                 tmpl = db.query(MessageTemplate).filter(
                     MessageTemplate.id == msg_in.template_id,
                     MessageTemplate.business_id == current_user.business_id
                 ).first()
-                if tmpl:
-                    template_name = tmpl.name
-                    template_lang = tmpl.language
+            elif template_name:
+                tmpl = db.query(MessageTemplate).filter(
+                    MessageTemplate.name == template_name,
+                    MessageTemplate.business_id == current_user.business_id
+                ).first()
+
+            if tmpl:
+                template_name = tmpl.name
+                template_lang = tmpl.language or template_lang
+
+            if not template_lang:
+                template_lang = "en_US" if template_name == "hello_world" else "en"
 
             if not template_name:
                 raise HTTPException(
@@ -272,10 +281,39 @@ async def send_message(
                 template_name=template_name,
                 language_code=template_lang,
                 parameters=msg_in.parameters,
-                media_url=msg_in.media_url,
+                media_url=None,
                 token=token
             )
             wamid = resp.get("messages", [{}])[0].get("id")
+
+            # Follow-up media dispatch if media_url (like APK) was attached
+            if msg_in.media_url:
+                lower_url = msg_in.media_url.lower()
+                if any(lower_url.endswith(x) or f"{x}?" in lower_url for x in [".jpg", ".jpeg", ".png", ".webp", ".gif"]):
+                    detected_type = "image"
+                elif any(lower_url.endswith(x) or f"{x}?" in lower_url for x in [".mp3", ".ogg", ".wav", ".aac", ".m4a"]):
+                    detected_type = "audio"
+                elif any(lower_url.endswith(x) or f"{x}?" in lower_url for x in [".mp4", ".3gp", ".mov"]):
+                    detected_type = "video"
+                else:
+                    detected_type = "document"
+
+                file_name = msg_in.media_url.split("/")[-1].split("?")[0]
+                if not file_name or file_name == "link":
+                    file_name = "application.apk" if ".apk" in lower_url else "attachment.bin"
+
+                try:
+                    await whatsapp_service.send_media_message(
+                        phone_number_id=phone_id,
+                        to_phone=normalized_phone,
+                        media_type=detected_type,
+                        media_url=msg_in.media_url,
+                        caption=None,
+                        filename=file_name,
+                        token=token
+                    )
+                except Exception as m_err:
+                    logger.warning(f"Template sent successfully, but follow-up media dispatch encountered notice: {m_err}")
         elif msg_in.media_url:
             lower_url = msg_in.media_url.lower()
             if any(lower_url.endswith(x) or f"{x}?" in lower_url for x in [".jpg", ".jpeg", ".png", ".webp", ".gif"]):

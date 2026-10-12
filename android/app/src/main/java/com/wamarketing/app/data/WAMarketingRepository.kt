@@ -911,7 +911,9 @@ class WAMarketingRepository(context: Context? = null) {
                     val tmplObj = JSONObject()
                     tmplObj.put("name", templateName)
                     val langObj = JSONObject()
-                    langObj.put("code", if (templateName == "hello_world") "en_US" else "en")
+                    val matchedTmpl = _templates.value.find { it.name == templateName }
+                    val resolvedLang = matchedTmpl?.language?.ifBlank { null } ?: "en_US"
+                    langObj.put("code", resolvedLang)
                     tmplObj.put("language", langObj)
                     payload.put("template", tmplObj)
                 } else if (mediaUrl != null) {
@@ -923,7 +925,7 @@ class WAMarketingRepository(context: Context? = null) {
                     }
                     if (isDoc) {
                         val fileName = mediaUrl.substringAfterLast("/").substringBefore("?")
-                        mediaObj.put("filename", if (fileName.isNotBlank()) fileName else "document.pdf")
+                        mediaObj.put("filename", if (fileName.isNotBlank()) fileName else "document.apk")
                     }
                     payload.put(waType, mediaObj)
                 } else {
@@ -946,7 +948,8 @@ class WAMarketingRepository(context: Context? = null) {
                     // If a template was sent and a media file/APK was also attached, send the file as follow-up
                     if (templateName != null && mediaUrl != null) {
                         try {
-                            val mediaConn = url.openConnection() as HttpURLConnection
+                            val mediaUrlObj = URL("https://graph.facebook.com/v19.0/$phoneId/messages")
+                            val mediaConn = mediaUrlObj.openConnection() as HttpURLConnection
                             mediaConn.requestMethod = "POST"
                             mediaConn.setRequestProperty("Authorization", "Bearer $token")
                             mediaConn.setRequestProperty("Content-Type", "application/json")
@@ -962,18 +965,27 @@ class WAMarketingRepository(context: Context? = null) {
                             mObj.put("link", mediaUrl)
                             if (isDoc) {
                                 val fileName = mediaUrl.substringAfterLast("/").substringBefore("?")
-                                mObj.put("filename", if (fileName.isNotBlank()) fileName else "file")
+                                mObj.put("filename", if (fileName.isNotBlank()) fileName else "application.apk")
                             }
                             mPayload.put(waType, mObj)
                             mediaConn.outputStream.use { os ->
                                 os.write(mPayload.toString().toByteArray(Charsets.UTF_8))
                             }
-                            mediaConn.responseCode
-                        } catch (_: Exception) {}
+                            val mCode = mediaConn.responseCode
+                            if (mCode in 200..299) {
+                                emitNotification("Template & Media (APK) Sent! (Meta ID: $msgId)")
+                            } else {
+                                val mErr = mediaConn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $mCode"
+                                emitNotification("Template sent, but Media notice ($mCode): $mErr")
+                            }
+                        } catch (mediaEx: Exception) {
+                            emitNotification("Template sent, file upload notice: ${mediaEx.localizedMessage}")
+                        }
+                    } else {
+                        emitNotification("WhatsApp Message Sent! (Meta ID: $msgId)")
                     }
 
                     _stats.value = calculateStats()
-                    emitNotification("WhatsApp Message Sent! (Meta ID: $msgId)")
                 } else {
                     val errResp = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $code"
                     val errJson = try { JSONObject(errResp).optJSONObject("error") } catch (_: Exception) { null }
@@ -1012,15 +1024,22 @@ class WAMarketingRepository(context: Context? = null) {
                 payload.put("to_phone", contact.phoneNumber)
                 payload.put("contact_id", contact.id)
                 payload.put("body", text)
-                if (mediaUrl != null) {
+                if (templateName != null) {
+                    payload.put("message_type", "template")
+                    payload.put("template_name", templateName)
+                    val matchedTmpl = _templates.value.find { it.name == templateName }
+                    val resolvedLang = matchedTmpl?.language?.ifBlank { null } ?: "en_US"
+                    payload.put("template_language", resolvedLang)
+                    if (mediaUrl != null) {
+                        payload.put("media_url", mediaUrl)
+                        val fileName = mediaUrl.substringAfterLast("/").substringBefore("?")
+                        payload.put("filename", if (fileName.isNotBlank()) fileName else "application.apk")
+                    }
+                } else if (mediaUrl != null) {
                     payload.put("message_type", waType)
                     payload.put("media_url", mediaUrl)
                     val fileName = mediaUrl.substringAfterLast("/").substringBefore("?")
                     payload.put("filename", if (fileName.isNotBlank()) fileName else "file")
-                } else if (templateName != null) {
-                    payload.put("message_type", "template")
-                    payload.put("template_name", templateName)
-                    payload.put("template_language", if (templateName == "hello_world") "en_US" else "en")
                 } else {
                     payload.put("message_type", "text")
                 }
