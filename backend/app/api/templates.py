@@ -48,14 +48,18 @@ async def create_template(
 
     # If submitting for WhatsApp Business Manager approval
     if template_in.template_type == "WhatsApp Approved Template":
-        # Check for active connected WhatsApp Account
+        # Check for active connected WhatsApp Account (with fallback to any account with access token)
         wa_account = db.query(WhatsAppAccount).filter(
             WhatsAppAccount.business_id == current_user.business_id,
             WhatsAppAccount.status == "CONNECTED"
+        ).first() or db.query(WhatsAppAccount).filter(
+            WhatsAppAccount.access_token.isnot(None)
         ).first()
 
-        if wa_account and wa_account.access_token:
-            waba_target = wa_account.waba_id or wa_account.phone_number_id
+        acc_token = wa_account.access_token if wa_account else whatsapp_service.default_token
+        waba_target = (wa_account.waba_id if wa_account and wa_account.waba_id else None) or (wa_account.phone_number_id if wa_account else None) or whatsapp_service.default_waba_id
+
+        if acc_token and waba_target:
             try:
                 meta_res = await whatsapp_service.create_meta_template(
                     waba_id=waba_target,
@@ -67,17 +71,16 @@ async def create_template(
                     footer_text=template_in.footer_text,
                     button_text=template_in.button_text,
                     button_url=template_in.button_url,
-                    token=wa_account.access_token
+                    token=acc_token
                 )
                 meta_id = str(meta_res.get("id", ""))
-                initial_status = meta_res.get("status", "APPROVED")
-                logger.info(f"Template '{clean_name}' successfully submitted to Meta (ID: {meta_id})")
+                initial_status = meta_res.get("status", "PENDING")
+                logger.info(f"Template '{clean_name}' successfully submitted to Meta (ID: {meta_id}, Status: {initial_status})")
             except Exception as e:
-                logger.warning(f"Meta template submission warning: {e}. Marking approved locally for uninterrupted testing.")
-                initial_status = "APPROVED"
+                logger.error(f"Meta template submission notice: {e}")
+                initial_status = "PENDING"
         else:
-            # No live account connected yet - auto-approve for client demonstration
-            initial_status = "APPROVED"
+            initial_status = "PENDING"
 
     template = MessageTemplate(
         business_id=current_user.business_id,
@@ -111,11 +114,15 @@ async def sync_meta_templates(
     wa_account = db.query(WhatsAppAccount).filter(
         WhatsAppAccount.business_id == current_user.business_id,
         WhatsAppAccount.status == "CONNECTED"
+    ).first() or db.query(WhatsAppAccount).filter(
+        WhatsAppAccount.access_token.isnot(None)
     ).first()
 
-    if wa_account and wa_account.access_token:
-        waba_target = wa_account.waba_id or wa_account.phone_number_id
-        meta_templates = await whatsapp_service.fetch_meta_templates(waba_target, token=wa_account.access_token)
+    acc_token = wa_account.access_token if wa_account else whatsapp_service.default_token
+    waba_target = (wa_account.waba_id if wa_account and wa_account.waba_id else None) or (wa_account.phone_number_id if wa_account else None) or whatsapp_service.default_waba_id
+
+    if acc_token and waba_target:
+        meta_templates = await whatsapp_service.fetch_meta_templates(waba_target, token=acc_token)
         for mt in meta_templates:
             mt_name = mt.get("name")
             mt_status = mt.get("status", "APPROVED")

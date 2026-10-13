@@ -103,6 +103,7 @@ class WAMarketingRepository(private val context: Context? = null) {
         if (_contacts.value.any { it.firstName in demoNames }) {
             purgeAllDemoData()
         }
+        startPeriodicTemplateSync()
     }
 
     private fun calculateStats(): DashboardStats {
@@ -280,11 +281,133 @@ class WAMarketingRepository(private val context: Context? = null) {
         val updated = listOf(template) + _templates.value.filter { it.id != template.id }
         _templates.value = updated
         persistTemplates(updated)
-        emitNotification("Template '${template.name}' saved locally")
+        emitNotification("Template '${template.name}' saved locally (${template.status})")
 
-        // Asynchronously submit template to Meta Business Manager via backend
-        val backendUrl = AppConfig.getBackendUrl(prefs)
+        // Asynchronously submit template to Meta Business Manager directly & via backend
         CoroutineScope(Dispatchers.IO).launch {
+            val activeAcc = _whatsappAccounts.value.find { it.isDefault && it.status != "ARCHIVED" }
+                ?: _whatsappAccounts.value.firstOrNull { it.status != "ARCHIVED" }
+            val token = activeAcc?.accessToken?.ifBlank { null } ?: prefs?.getString("meta_access_token", null)
+            val wabaId = activeAcc?.wabaId?.ifBlank { null }
+                ?: prefs?.getString("meta_waba_id", null)
+                ?: activeAcc?.phoneNumberId?.ifBlank { null }
+                ?: prefs?.getString("meta_phone_number_id", null)
+
+            var submittedToMeta = false
+
+            // 1. Direct submission to Meta WhatsApp Manager (POST https://graph.facebook.com/v19.0/{waba_id}/message_templates)
+            if (!token.isNullOrBlank() && !wabaId.isNullOrBlank() && template.templateType == "WhatsApp Approved Template") {
+                try {
+                    val cleanName = template.name.trim().lowercase().replace(" ", "_").filter { it.isLetterOrDigit() || it == '_' }
+                    val catUpper = template.category.uppercase()
+                    val metaCategory = when {
+                        catUpper.contains("UTIL") -> "UTILITY"
+                        catUpper.contains("AUTH") -> "AUTHENTICATION"
+                        else -> "MARKETING"
+                    }
+
+                    // Parse variables {{var}} into {{1}}, {{2}} and extract example values
+                    val varPattern = Regex("""\{\{\s*([a-zA-Z0-9_]+)\s*\}\}""")
+                    val matches = varPattern.findAll(template.content).toList()
+                    var bodyText = template.content
+                    val exampleValues = mutableListOf<String>()
+                    matches.forEachIndexed { idx, matchResult ->
+                        val vName = matchResult.groupValues[1]
+                        bodyText = bodyText.replaceFirst(matchResult.value, "{{${idx + 1}}}")
+                        exampleValues.add(if (vName.contains("name", ignoreCase = true)) "John" else "Business")
+                    }
+
+                    val componentsArray = JSONArray()
+                    val bodyObj = JSONObject().apply {
+                        put("type", "BODY")
+                        put("text", bodyText)
+                        if (exampleValues.isNotEmpty()) {
+                            val exObj = JSONObject()
+                            val bodyTextArr = JSONArray()
+                            val innerValues = JSONArray()
+                            exampleValues.forEach { innerValues.put(it) }
+                            bodyTextArr.put(innerValues)
+                            exObj.put("body_text", bodyTextArr)
+                            put("example", exObj)
+                        }
+                    }
+                    componentsArray.put(bodyObj)
+
+                    if (!template.buttonText.isNullOrBlank() && !template.buttonUrl.isNullOrBlank()) {
+                        val btnObj = JSONObject().apply {
+                            put("type", "BUTTONS")
+                            val btnList = JSONArray()
+                            var cleanUrl = template.buttonUrl.trim()
+                            if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+                                cleanUrl = "https://$cleanUrl"
+                            }
+                            btnList.put(JSONObject().apply {
+                                put("type", "URL")
+                                put("text", template.buttonText.trim().take(25))
+                                put("url", cleanUrl)
+                            })
+                            put("buttons", btnList)
+                        }
+                        componentsArray.put(btnObj)
+                    }
+
+                    val metaPayload = JSONObject().apply {
+                        put("name", cleanName)
+                        put("category", metaCategory)
+                        val lang = template.language.ifBlank { "en_US" }
+                        put("language", if (lang.length == 2 && lang == "en") "en_US" else lang)
+                        put("components", componentsArray)
+                    }
+
+                    val metaUrl = URL("https://graph.facebook.com/v19.0/$wabaId/message_templates")
+                    val metaConn = metaUrl.openConnection() as HttpURLConnection
+                    metaConn.requestMethod = "POST"
+                    metaConn.setRequestProperty("Authorization", "Bearer $token")
+                    metaConn.setRequestProperty("Content-Type", "application/json")
+                    metaConn.doOutput = true
+                    metaConn.connectTimeout = 15000
+                    metaConn.readTimeout = 15000
+
+                    metaConn.outputStream.use { os ->
+                        os.write(metaPayload.toString().toByteArray(Charsets.UTF_8))
+                    }
+
+                    val metaCode = metaConn.responseCode
+                    if (metaCode in 200..299) {
+                        val respStr = metaConn.inputStream.bufferedReader().use { it.readText() }
+                        val respObj = JSONObject(respStr)
+                        val returnedStatus = respObj.optString("status", "PENDING")
+                        submittedToMeta = true
+
+                        val refreshed = _templates.value.map { tmpl ->
+                            if (tmpl.id == template.id) tmpl.copy(status = returnedStatus) else tmpl
+                        }
+                        _templates.value = refreshed
+                        persistTemplates(refreshed)
+                        emitNotification("Template '${template.name}' created in Meta WhatsApp Manager! ($returnedStatus)")
+                    } else {
+                        val err = metaConn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $metaCode"
+                        try {
+                            val errJson = JSONObject(err).optJSONObject("error")
+                            val errMsg = errJson?.optString("message", err) ?: err
+                            val errSubcode = errJson?.optInt("error_subcode", 0) ?: 0
+                            val errCode = errJson?.optInt("code", metaCode) ?: metaCode
+                            if (errCode == 190 || errSubcode == 463) {
+                                emitNotification("Meta Notice: Access Token expired. Please refresh in Settings.")
+                            } else {
+                                emitNotification("Meta Notice ($errCode): $errMsg")
+                            }
+                        } catch (_: Exception) {
+                            emitNotification("Meta Notice ($metaCode): $err")
+                        }
+                    }
+                } catch (e: Exception) {
+                    emitNotification("Meta Submission Notice: ${e.localizedMessage}")
+                }
+            }
+
+            // 2. Also synchronize to Railway backend server
+            val backendUrl = AppConfig.getBackendUrl(prefs)
             try {
                 val url = URL("$backendUrl/api/v1/templates")
                 val conn = url.openConnection() as HttpURLConnection
@@ -295,17 +418,14 @@ class WAMarketingRepository(private val context: Context? = null) {
                 conn.connectTimeout = 12000
                 conn.readTimeout = 12000
 
-                val payload = JSONObject()
-                payload.put("name", template.name)
-                payload.put("category", template.category)
-                payload.put("language", template.language)
-                payload.put("content", template.content)
-                payload.put("template_type", template.templateType)
-                if (!template.buttonText.isNullOrBlank()) {
-                    payload.put("button_text", template.buttonText)
-                }
-                if (!template.buttonUrl.isNullOrBlank()) {
-                    payload.put("button_url", template.buttonUrl)
+                val payload = JSONObject().apply {
+                    put("name", template.name)
+                    put("category", template.category)
+                    put("language", template.language)
+                    put("content", template.content)
+                    put("template_type", template.templateType)
+                    if (!template.buttonText.isNullOrBlank()) put("button_text", template.buttonText)
+                    if (!template.buttonUrl.isNullOrBlank()) put("button_url", template.buttonUrl)
                 }
 
                 conn.outputStream.use { os ->
@@ -313,70 +433,202 @@ class WAMarketingRepository(private val context: Context? = null) {
                 }
 
                 val code = conn.responseCode
-                if (code in 200..299) {
+                if (code in 200..299 && !submittedToMeta) {
                     val respStr = conn.inputStream.bufferedReader().use { it.readText() }
                     val respObj = JSONObject(respStr)
-                    val status = respObj.optString("status", "APPROVED")
-                    emitNotification("Template '${template.name}' submitted to Meta WhatsApp Manager (${status})")
-                } else {
-                    val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $code"
-                    emitNotification("Backend Notice ($code): $err")
+                    val status = respObj.optString("status", "PENDING")
+                    val refreshed = _templates.value.map { tmpl ->
+                        if (tmpl.id == template.id) tmpl.copy(status = status) else tmpl
+                    }
+                    _templates.value = refreshed
+                    persistTemplates(refreshed)
+                    emitNotification("Template '${template.name}' saved ($status)")
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Keep local saved version intact
             }
         }
     }
 
     /**
-     * Pulls live approved templates from Meta WhatsApp Business Manager into local repository
+     * Pulls live approved templates directly from Meta WhatsApp Business Manager into local repository
      */
-    fun syncTemplatesFromMeta() {
-        val backendUrl = AppConfig.getBackendUrl(prefs)
+    fun syncTemplatesFromMeta(silent: Boolean = false) {
         CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val url = URL("$backendUrl/api/v1/templates/sync-meta")
-                val conn = url.openConnection() as HttpURLConnection
-                AppConfig.applyStandardHeaders(conn)
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 15000
-                conn.readTimeout = 15000
+            val activeAcc = _whatsappAccounts.value.find { it.isDefault && it.status != "ARCHIVED" }
+                ?: _whatsappAccounts.value.firstOrNull { it.status != "ARCHIVED" }
+            val token = activeAcc?.accessToken?.ifBlank { null } ?: prefs?.getString("meta_access_token", null)
+            val wabaId = activeAcc?.wabaId?.ifBlank { null }
+                ?: prefs?.getString("meta_waba_id", null)
+                ?: activeAcc?.phoneNumberId?.ifBlank { null }
+                ?: prefs?.getString("meta_phone_number_id", null)
 
-                val code = conn.responseCode
-                if (code in 200..299) {
-                    val respStr = conn.inputStream.bufferedReader().use { it.readText() }
-                    val array = JSONArray(respStr)
-                    val metaList = mutableListOf<TemplateItem>()
-                    for (i in 0 until array.length()) {
-                        val obj = array.getJSONObject(i)
-                        metaList.add(
-                            TemplateItem(
-                                id = obj.getInt("id"),
-                                name = obj.getString("name"),
-                                category = obj.optString("category", "Marketing"),
-                                language = obj.optString("language", "en"),
-                                content = obj.optString("content", ""),
-                                templateType = obj.optString("template_type", "WhatsApp Approved Template"),
-                                status = obj.optString("status", "APPROVED"),
-                                buttonText = if (obj.isNull("button_text")) null else obj.optString("button_text").ifBlank { null },
-                                buttonUrl = if (obj.isNull("button_url")) null else obj.optString("button_url").ifBlank { null }
+            var metaSynced = false
+
+            // 1. Direct Sync from Meta Graph API
+            if (!token.isNullOrBlank() && !wabaId.isNullOrBlank()) {
+                try {
+                    val url = URL("https://graph.facebook.com/v19.0/$wabaId/message_templates?fields=name,status,category,language,components,id&limit=100")
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.requestMethod = "GET"
+                    conn.setRequestProperty("Authorization", "Bearer $token")
+                    conn.connectTimeout = 15000
+                    conn.readTimeout = 15000
+
+                    val code = conn.responseCode
+                    if (code in 200..299) {
+                        val respStr = conn.inputStream.bufferedReader().use { it.readText() }
+                        val rootObj = JSONObject(respStr)
+                        val array = rootObj.optJSONArray("data") ?: JSONArray()
+                        val metaList = mutableListOf<TemplateItem>()
+
+                        for (i in 0 until array.length()) {
+                            val obj = array.getJSONObject(i)
+                            val name = obj.getString("name")
+                            val status = obj.optString("status", "APPROVED")
+                            val category = obj.optString("category", "MARKETING").lowercase().replaceFirstChar { it.titlecase(Locale.ROOT) }
+                            val lang = obj.optString("language", "en_US")
+                            val id = obj.optString("id", "${1000 + i}").hashCode().let { if (it < 0) -it else it }
+
+                            var bodyText = ""
+                            var btnText: String? = null
+                            var btnUrl: String? = null
+
+                            val comps = obj.optJSONArray("components")
+                            if (comps != null) {
+                                for (c in 0 until comps.length()) {
+                                    val cObj = comps.getJSONObject(c)
+                                    val cType = cObj.optString("type")
+                                    if (cType == "BODY") {
+                                        bodyText = cObj.optString("text", "")
+                                    } else if (cType == "BUTTONS") {
+                                        val btns = cObj.optJSONArray("buttons")
+                                        if (btns != null && btns.length() > 0) {
+                                            val b = btns.getJSONObject(0)
+                                            btnText = b.optString("text", "").ifBlank { null }
+                                            btnUrl = b.optString("url", "").ifBlank { null }
+                                        }
+                                    }
+                                }
+                            }
+
+                            metaList.add(
+                                TemplateItem(
+                                    id = id,
+                                    name = name,
+                                    category = category,
+                                    language = lang,
+                                    content = bodyText.ifBlank { "Meta template: $name" },
+                                    templateType = "WhatsApp Approved Template",
+                                    status = status,
+                                    buttonText = btnText,
+                                    buttonUrl = btnUrl
+                                )
                             )
-                        )
+                        }
+
+                        if (metaList.isNotEmpty()) {
+                            metaSynced = true
+                            val prevTemplates = _templates.value
+                            val newlyApproved = metaList.filter { m ->
+                                val old = prevTemplates.find { it.name.equals(m.name, ignoreCase = true) }
+                                old != null && old.status == "PENDING" && m.status == "APPROVED"
+                            }
+
+                            val metaNames = metaList.map { it.name.lowercase() }.toSet()
+                            val merged = metaList + prevTemplates.filter { it.name.lowercase() !in metaNames }
+                            _templates.value = merged
+                            persistTemplates(merged)
+
+                            if (newlyApproved.isNotEmpty()) {
+                                emitNotification("Meta Approved: ${newlyApproved.first().name} is now approved!")
+                            } else if (!silent) {
+                                emitNotification("Synced ${metaList.size} templates from Meta WhatsApp Manager")
+                            }
+                        }
                     }
-                    if (metaList.isNotEmpty()) {
-                        val metaNames = metaList.map { it.name }.toSet()
-                        val merged = metaList + _templates.value.filter { it.name !in metaNames }
-                        _templates.value = merged
-                        persistTemplates(merged)
-                        emitNotification("Synced ${metaList.size} templates from Meta WhatsApp Manager")
-                    } else {
-                        emitNotification("Meta returned 0 remote templates")
+                } catch (e: Exception) {
+                    if (!silent) {
+                        emitNotification("Meta direct sync notice: ${e.localizedMessage}")
                     }
-                } else {
-                    emitNotification("Failed to sync Meta templates (HTTP $code)")
                 }
-            } catch (e: Exception) {
-                emitNotification("Sync error: ${e.localizedMessage}")
+            }
+
+            // 2. Fallback to Railway backend if Meta direct sync wasn't completed
+            if (!metaSynced) {
+                val backendUrl = AppConfig.getBackendUrl(prefs)
+                try {
+                    val url = URL("$backendUrl/api/v1/templates/sync-meta")
+                    val conn = url.openConnection() as HttpURLConnection
+                    AppConfig.applyStandardHeaders(conn)
+                    conn.requestMethod = "POST"
+                    conn.connectTimeout = 15000
+                    conn.readTimeout = 15000
+
+                    val code = conn.responseCode
+                    if (code in 200..299) {
+                        val respStr = conn.inputStream.bufferedReader().use { it.readText() }
+                        val array = JSONArray(respStr)
+                        val metaList = mutableListOf<TemplateItem>()
+                        for (i in 0 until array.length()) {
+                            val obj = array.getJSONObject(i)
+                            metaList.add(
+                                TemplateItem(
+                                    id = obj.getInt("id"),
+                                    name = obj.getString("name"),
+                                    category = obj.optString("category", "Marketing"),
+                                    language = obj.optString("language", "en"),
+                                    content = obj.optString("content", ""),
+                                    templateType = obj.optString("template_type", "WhatsApp Approved Template"),
+                                    status = obj.optString("status", "APPROVED"),
+                                    buttonText = if (obj.isNull("button_text")) null else obj.optString("button_text").ifBlank { null },
+                                    buttonUrl = if (obj.isNull("button_url")) null else obj.optString("button_url").ifBlank { null }
+                                )
+                            )
+                        }
+                        if (metaList.isNotEmpty()) {
+                            val prevTemplates = _templates.value
+                            val newlyApproved = metaList.filter { m ->
+                                val old = prevTemplates.find { it.name.equals(m.name, ignoreCase = true) }
+                                old != null && old.status == "PENDING" && m.status == "APPROVED"
+                            }
+                            val metaNames = metaList.map { it.name }.toSet()
+                            val merged = metaList + prevTemplates.filter { it.name !in metaNames }
+                            _templates.value = merged
+                            persistTemplates(merged)
+
+                            if (newlyApproved.isNotEmpty()) {
+                                emitNotification("Meta Approved: ${newlyApproved.first().name} is ready!")
+                            } else if (!silent) {
+                                emitNotification("Synced ${metaList.size} templates from Meta WhatsApp Manager")
+                            }
+                        } else if (!silent) {
+                            emitNotification("Meta returned 0 remote templates")
+                        }
+                    } else if (!silent) {
+                        emitNotification("Failed to sync Meta templates (HTTP $code)")
+                    }
+                } catch (e: Exception) {
+                    if (!silent) emitNotification("Sync error: ${e.localizedMessage}")
+                }
+            }
+        }
+    }
+
+    /**
+     * Polls Meta WhatsApp Manager every 2 minutes (120,000 ms)
+     * if there are any PENDING templates, updating approval statuses immediately.
+     */
+    fun startPeriodicTemplateSync() {
+        CoroutineScope(Dispatchers.IO).launch {
+            while (true) {
+                delay(120_000) // 2-minute interval
+                try {
+                    val hasPending = _templates.value.any { it.status == "PENDING" }
+                    if (hasPending) {
+                        syncTemplatesFromMeta(silent = true)
+                    }
+                } catch (_: Exception) {}
             }
         }
     }

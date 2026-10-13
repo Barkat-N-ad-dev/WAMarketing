@@ -41,7 +41,8 @@ fun TemplatesScreen(
         templates.filter { tmpl ->
             val matchesCategory = selectedCategory == "All" || tmpl.category.equals(selectedCategory, ignoreCase = true)
             val matchesType = when (selectedTypeFilter) {
-                "Approved" -> tmpl.templateType == "WhatsApp Approved Template"
+                "Pending" -> tmpl.status == "PENDING"
+                "Approved" -> tmpl.status == "APPROVED"
                 "Local" -> tmpl.templateType == "Local App Template"
                 else -> true
             }
@@ -104,13 +105,16 @@ fun TemplatesScreen(
             // Type filter tabs (All, WhatsApp Approved, Local App)
             TabRow(
                 selectedTabIndex = when (selectedTypeFilter) {
-                    "Approved" -> 1
-                    "Local" -> 2
+                    "Pending" -> 1
+                    "Approved" -> 2
+                    "Local" -> 3
                     else -> 0
                 },
                 containerColor = Color.Transparent
             ) {
                 Tab(selected = selectedTypeFilter == "All", onClick = { selectedTypeFilter = "All" }, text = { Text("All (${templates.size})") })
+                val pendingCount = templates.count { it.status == "PENDING" }
+                Tab(selected = selectedTypeFilter == "Pending", onClick = { selectedTypeFilter = "Pending" }, text = { Text("Pending${if (pendingCount > 0) " ($pendingCount)" else ""}") })
                 Tab(selected = selectedTypeFilter == "Approved", onClick = { selectedTypeFilter = "Approved" }, text = { Text("Meta Approved") })
                 Tab(selected = selectedTypeFilter == "Local", onClick = { selectedTypeFilter = "Local" }, text = { Text("Local Drafts") })
             }
@@ -362,7 +366,7 @@ fun CreateTemplateDialog(
                             language = language,
                             content = content,
                             templateType = if (isOfficial) "WhatsApp Approved Template" else "Local App Template",
-                            status = if (isOfficial) "APPROVED" else "DRAFT",
+                            status = if (isOfficial) "PENDING" else "DRAFT",
                             variables = listOf("first_name", "company"),
                             buttonText = if (addWebsiteButton && buttonText.isNotBlank()) buttonText.trim() else null,
                             buttonUrl = if (addWebsiteButton && buttonUrl.isNotBlank()) buttonUrl.trim() else null
